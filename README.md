@@ -19,7 +19,7 @@ Bear in mind that the feature is highly limited for free users.
 
 As you may know, Google Cloud Messaging **won't work** as you expect without the client part.
 
-You won't find the instructions how to create your own Google Cloud Messaging client. Although, [this](https://developer.android.com/google/gcm/client.html) example should work fine.
+You won't find the instructions how to create your own Google Cloud Messaging client here. Although, [this](https://developer.android.com/google/gcm/client.html) example should work fine.
 
 You also need to send this stanza to the server over the XMPP connection, to let the server know your client key:
 ```xml
