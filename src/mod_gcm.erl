@@ -83,7 +83,6 @@ send([{Key, Value}|R], API_KEY) ->
 %% Or this could be the limits, like 10 messages/user, 10 messages/hour, etc
 %% TODO: Check subscription of the source
 message(From, To, Packet) ->
-	?INFO_MSG("A message is coming out", []),
 	Type = xml:get_tag_attr_s(<<"type">>, Packet),
 	case catch Type of 
 		"normal" -> ok;
@@ -94,10 +93,7 @@ message(From, To, Packet) ->
 
 			%% Could be an error here when there's no body
 			Msg = xml:get_tag_cdata(xml:get_subtag(Packet, <<"body">>)),
-
-			?INFO_MSG("From ~s Type ~s Msg ~s", [JFrom, JTo, Msg]),
 			Result = mnesia:dirty_read(gcm_users, {To#jid.user, To#jid.server}),
-
 			case catch Result of 
 				[] -> ?DEBUG("mod_gcm: No such record found for ~s", [JTo]);
 				[#gcm_users{gcm_key = API_KEY}] ->
