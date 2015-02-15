@@ -21,8 +21,9 @@
 
 -export([start/2, stop/1, message/3, iq/3]).
 
-
 %% 114196@stackoverflow
+-spec(url_encode(string()) -> string()).
+
 escape_uri(S) when is_list(S) ->
     escape_uri(unicode:characters_to_binary(S));
 escape_uri(<<C:8, Cs/binary>>) when C >= $a, C =< $z ->
@@ -52,7 +53,7 @@ hex_octet(N) when N > 15 ->
 hex_octet(N) ->
     [N - 10 + $a].
 
--spec(url_encode(string()) -> string()).
+
 url_encode(Data) ->
     url_encode(Data,"").
 
@@ -64,6 +65,7 @@ url_encode([{Key,Value}|R],Acc) ->
     url_encode(R, Acc ++ "&" ++ escape_uri(Key) ++ "=" ++ escape_uri(Value)).
 
 
+%% Send an HTTP request to Google APIs and handle the response
 send([{Key, Value}|R], API_KEY) ->
 	Header = [{"Authorization", url_encode([{"key", API_KEY}])}],
 	Body = url_encode([{Key, Value}|R]),
@@ -81,26 +83,39 @@ send([{Key, Value}|R], API_KEY) ->
 
 %% TODO: Define some kind of a shaper to prevent floods and the GCM API to burn out :/
 %% Or this could be the limits, like 10 messages/user, 10 messages/hour, etc
-%% TODO: Check subscription of the source
 message(From, To, Packet) ->
 	Type = xml:get_tag_attr_s(<<"type">>, Packet),
+	?INFO_MSG("Offline message ~s", [From]),
 	case catch Type of 
 		"normal" -> ok;
 		_ ->
-			%% strings
+			%% Strings
 			JFrom = jlib:jid_to_string(From#jid{user = From#jid.user, server = From#jid.server, resource = <<"">>}),
 			JTo = jlib:jid_to_string(To#jid{user = To#jid.user, server = To#jid.server, resource = <<"">>}),
+			ToUser = To#jid.user,
+			ToServer = To#jid.server,
 
-			%% Could be an error here when there's no body
-			Msg = xml:get_tag_cdata(xml:get_subtag(Packet, <<"body">>)),
-			Result = mnesia:dirty_read(gcm_users, {To#jid.user, To#jid.server}),
-			case catch Result of 
-				[] -> ?DEBUG("mod_gcm: No such record found for ~s", [JTo]);
-				[#gcm_users{gcm_key = API_KEY}] ->
-					Args = [{"registration_id", binary_to_list(API_KEY)}, {"data.message", Msg}, {"data.source", binary_to_list(JFrom)}, {"data.destination", binary_to_list(JTo)}],
-					send(Args, binary_to_list(ejabberd_config:get_global_option(gcm_api_key, fun(V) -> V end)))
-				end
-			end.
+			Body = xml:get_path_s(Packet, [{elem, <<"body">>}, cdata]),
+
+			%% Checking subscription
+			{Subscription, _Groups} = 
+				ejabberd_hooks:run_fold(roster_get_jid_info, ToServer, {none, []}, [ToUser, ToServer, From]),
+			case Subscription of
+				both ->
+					case catch Body of
+						<<>> -> ok; %% There is no body
+						_ ->
+							Result = mnesia:dirty_read(gcm_users, {ToUser, ToServer}),
+							case catch Result of 
+								[] -> ?DEBUG("mod_gcm: No such record found for ~s", [JTo]);
+								[#gcm_users{gcm_key = API_KEY}] ->
+									Args = [{"registration_id", API_KEY}, {"data.message", Body}, {"data.source", JFrom}, {"data.destination", JTo}],
+									send(Args, ejabberd_config:get_global_option(gcm_api_key, fun(V) -> V end))
+							end
+						end;
+					_ -> ok
+			end
+	end.
 
 
 iq(#jid{user = User, server = Server} = From, To, #iq{type = Type, sub_el = SubEl} = IQ) ->
@@ -135,10 +150,15 @@ iq(#jid{user = User, server = Server} = From, To, #iq{type = Type, sub_el = SubE
 
 start(Host, Opts) -> 
 	mnesia:create_table(gcm_users, [{disc_copies, [node()]}, {attributes, record_info(fields, gcm_users)}]),
-	gen_iq_handler:add_iq_handler(ejabberd_local, Host, <<?NS_GCM>>, ?MODULE, iq, no_queue),
-	ejabberd_hooks:add(offline_message_hook, Host, ?MODULE, message, 49),
-	?INFO_MSG("mod_gcm Has started successfully!", []),
-	ok.
+	case catch ejabberd_config:get_global_option(gcm_api_key, fun(V) -> V end) of
+		undefined -> ?ERROR_MSG("There is no API_KEY set! The GCM module won't work without the KEY!", []);
+		_ ->
+			gen_iq_handler:add_iq_handler(ejabberd_local, Host, <<?NS_GCM>>, ?MODULE, iq, no_queue),
+			ejabberd_hooks:add(offline_message_hook, Host, ?MODULE, message, 49),
+			?INFO_MSG("mod_gcm Has started successfully!", []),
+			ok
+		end.
+
 
 
 stop(Host) -> ok.
