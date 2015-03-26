@@ -1,6 +1,8 @@
 mod_gcm
-======
+=====
 mod_gcm is an ejabberd module to send offline messages as PUSH notifications for Android using Google Cloud Messaging API.
+
+This module **has nothing to do** with [XEP-0357](http://xmpp.org/extensions/xep-0357.html) right now. But it may be in the future.
 
 The main goal of this module is to send all offline messages to the registered (see [Usage](#Usage)) clients via Google Cloud Messaging service.
 
