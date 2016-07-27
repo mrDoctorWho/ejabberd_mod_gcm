@@ -41,21 +41,7 @@ You also need to send this stanza to the server over the XMPP connection, to let
 
 The key is kept in mnesia database and completely belongs to the JabberID which it was sent from.
 
+
 **Compatibility**:
 
-The module should work fine with Ejabberd 14 and 15.
-
-There is at least one known [issue](https://github.com/mrDoctorWho/ejabberd_mod_gcm/issues/6) with Ejabberd 16 which can be solved by changing all calls to the **xml** module by calls to **fxml**. There is no support for both versions so far.
-
-Literally, you need to change this:
-
-```erlang
-Type = xml:get_tag_attr_s(<<"type">>, Packet),
-```
-To this:
-
-```erlang
-Type = fxml:get_tag_attr_s(<<"type">>, Packet),
-```
-
-And a few other matches.
+The module works fine with Ejabberd 16 and maybe the further versions. For the older ones, checkout the *ejabberd14* branch.
