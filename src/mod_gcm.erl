@@ -21,7 +21,7 @@
 
 -export([start/2, stop/1, message/3, iq/3]).
 
-%% 114196@stackoverflow
+%% http://stackoverflow.com/questions/114196/url-encode-in-erlang
 -spec(url_encode(string()) -> string()).
 
 escape_uri(S) when is_list(S) ->
@@ -75,16 +75,17 @@ send([{Key, Value}|R], API_KEY) ->
 	%% {{"HTTP/1.1",200,"OK"} ..}
 	{{_, SCode, Status}, ResponseBody} = {element(1, RawResponse), element(3, RawResponse)},
 	%% TODO: Errors 5xx
-	case catch SCode of
+	case SCode of
 		200 -> ?DEBUG("mod_gcm: A message was sent", []);
 		401 -> ?ERROR_MSG("mod_gcm: ~s", [Status]);
 		_ -> ?ERROR_MSG("mod_gcm: ~s", [ResponseBody])
 	end.
 
+
 %% TODO: Define some kind of a shaper to prevent floods and the GCM API to burn out :/
 %% Or this could be the limits, like 10 messages/user, 10 messages/hour, etc
 message(From, To, Packet) ->
-	Type = xml:get_tag_attr_s(<<"type">>, Packet),
+	Type = fxml:get_tag_attr_s(<<"type">>, Packet),
 	?INFO_MSG("Offline message ~s", [From]),
 	case catch Type of 
 		"normal" -> ok;
@@ -95,18 +96,18 @@ message(From, To, Packet) ->
 			ToUser = To#jid.user,
 			ToServer = To#jid.server,
 
-			Body = xml:get_path_s(Packet, [{elem, <<"body">>}, cdata]),
+			Body = fxml:get_path_s(Packet, [{elem, <<"body">>}, cdata]),
 
 			%% Checking subscription
 			{Subscription, _Groups} = 
 				ejabberd_hooks:run_fold(roster_get_jid_info, ToServer, {none, []}, [ToUser, ToServer, From]),
 			case Subscription of
 				both ->
-					case catch Body of
+					case Body of
 						<<>> -> ok; %% There is no body
 						_ ->
 							Result = mnesia:dirty_read(gcm_users, {ToUser, ToServer}),
-							case catch Result of 
+							case Result of 
 								[] -> ?DEBUG("mod_gcm: No such record found for ~s", [JTo]);
 								[#gcm_users{gcm_key = API_KEY}] ->
 									Args = [{"registration_id", API_KEY}, {"data.message", Body}, {"data.source", JFrom}, {"data.destination", JTo}],
@@ -125,7 +126,7 @@ iq(#jid{user = User, server = Server} = From, To, #iq{type = Type, sub_el = SubE
 	{MegaSecs, Secs, _MicroSecs} = now(),
 	TimeStamp = MegaSecs * 1000000 + Secs,
 
-	API_KEY = xml:get_tag_cdata(xml:get_subtag(SubEl, <<"key">>)),
+	API_KEY = fxml:get_tag_cdata(fxml:get_subtag(SubEl, <<"key">>)),
 
 	F = fun() -> mnesia:write(#gcm_users{user={LUser, LServer}, gcm_key=API_KEY, last_seen=TimeStamp}) end,
 
@@ -158,7 +159,6 @@ start(Host, Opts) ->
 			?INFO_MSG("mod_gcm Has started successfully!", []),
 			ok
 		end.
-
 
 
 stop(Host) -> ok.
