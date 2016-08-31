@@ -17,9 +17,10 @@ Because of the dependencies such as xml.hrl, logger.hrl, etc it's recommended to
 
 **Configuration**:
 
-To let the module work fine with Google APIs, put the line below in your ejabberd config file. In case of ejabberd 14, the line is:
+To let the module work fine with Google APIs, put the lines below in the ejabberd modules section:
 ```yaml
-gcm_api_key: "Your Google APIs key"
+mod_gcm:
+  gcm_api_key: "Your Google APIs key"
 ```
 [Here](https://developer.android.com/google/gcm/gs.html) you can create your own API key for Google Cloud Messaging (you need the server key).
 Bear in mind that the feature is highly limited for free users.
