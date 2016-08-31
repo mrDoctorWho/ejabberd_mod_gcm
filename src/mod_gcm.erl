@@ -19,7 +19,7 @@
 -define(CONTENT_TYPE, "application/x-www-form-urlencoded;charset=UTF-8").
 
 
--export([start/2, stop/1, message/3, iq/3]).
+-export([start/2, stop/1, message/3, iq/3, mod_opt_type/1, depends/2]).
 
 %% 114196@stackoverflow
 -spec(url_encode(string()) -> string()).
@@ -69,24 +69,22 @@ url_encode([{Key,Value}|R],Acc) ->
 send([{Key, Value}|R], API_KEY) ->
 	Header = [{"Authorization", url_encode([{"key", API_KEY}])}],
 	Body = url_encode([{Key, Value}|R]),
-	ssl:start(),
-	application:start(inets),
 	{ok, RawResponse} = httpc:request(post, {?GCM_URL, Header, ?CONTENT_TYPE, Body}, [], []),
 	%% {{"HTTP/1.1",200,"OK"} ..}
 	{{_, SCode, Status}, ResponseBody} = {element(1, RawResponse), element(3, RawResponse)},
 	%% TODO: Errors 5xx
-	case catch SCode of
-		200 -> ?DEBUG("mod_gcm: A message was sent", []);
-		401 -> ?ERROR_MSG("mod_gcm: ~s", [Status]);
-		_ -> ?ERROR_MSG("mod_gcm: ~s", [ResponseBody])
+	case SCode of
+		200 -> ?DEBUG("mod_gcm: t(he message was sent", []);
+		401 -> ?ERROR_MSG("mod_gcm: error! Code ~B (~s)", [SCode, Status]);
+		_ -> ?ERROR_MSG("mod_gcm: error! Code ~B (~s), response: \"~s\"", [SCode, Status, ResponseBody])
 	end.
 
 %% TODO: Define some kind of a shaper to prevent floods and the GCM API to burn out :/
 %% Or this could be the limits, like 10 messages/user, 10 messages/hour, etc
 message(From, To, Packet) ->
 	Type = xml:get_tag_attr_s(<<"type">>, Packet),
-	?INFO_MSG("Offline message ~s", [From]),
-	case catch Type of 
+	?DEBUG("mod_gcm: got offline message", []),
+	case Type of 
 		"normal" -> ok;
 		_ ->
 			%% Strings
@@ -96,21 +94,28 @@ message(From, To, Packet) ->
 			ToServer = To#jid.server,
 
 			Body = xml:get_path_s(Packet, [{elem, <<"body">>}, cdata]),
+			ServerKey = gen_mod:get_module_opt(ToServer, ?MODULE, gcm_api_key, fun(V) -> V end, undefined),
 
 			%% Checking subscription
 			{Subscription, _Groups} = 
 				ejabberd_hooks:run_fold(roster_get_jid_info, ToServer, {none, []}, [ToUser, ToServer, From]),
 			case Subscription of
 				both ->
-					case catch Body of
+					case Body of
 						<<>> -> ok; %% There is no body
 						_ ->
 							Result = mnesia:dirty_read(gcm_users, {ToUser, ToServer}),
-							case catch Result of 
-								[] -> ?DEBUG("mod_gcm: No such record found for ~s", [JTo]);
+							case Result of 
+								[] -> ?DEBUG("mod_gcm: no record found for ~s", [JTo]);
 								[#gcm_users{gcm_key = API_KEY}] ->
+									?DEBUG("mod_gcm: sending the message to GCM for user ~s", [JTo]),
 									Args = [{"registration_id", API_KEY}, {"data.message", Body}, {"data.source", JFrom}, {"data.destination", JTo}],
-									send(Args, ejabberd_config:get_global_option(gcm_api_key, fun(V) -> V end))
+									if ServerKey /=
+										undefined -> send(Args, ServerKey);
+										true ->
+											?ERROR_MSG("mod_gcm: gcm_api_key is undefined!", []),
+											ok
+									end
 							end
 						end;
 					_ -> ok
@@ -118,7 +123,7 @@ message(From, To, Packet) ->
 	end.
 
 
-iq(#jid{user = User, server = Server} = From, To, #iq{type = Type, sub_el = SubEl} = IQ) ->
+iq(#jid{user = User, server = Server}, _To, #iq{sub_el = SubEl} = IQ) ->
 	LUser = jlib:nodeprep(User),
 	LServer = jlib:nameprep(Server),
 
@@ -129,36 +134,40 @@ iq(#jid{user = User, server = Server} = From, To, #iq{type = Type, sub_el = SubE
 
 	F = fun() -> mnesia:write(#gcm_users{user={LUser, LServer}, gcm_key=API_KEY, last_seen=TimeStamp}) end,
 
-	case catch mnesia:dirty_read(gcm_users, {LUser, LServer}) of
+	case mnesia:dirty_read(gcm_users, {LUser, LServer}) of
 		[] ->
 			mnesia:transaction(F),
-			?DEBUG("mod_gcm: New user registered ~s@~s", [LUser, LServer]);
+			?DEBUG("mod_gcm: new user registered ~s@~s", [LUser, LServer]);
 
 		%% Record exists, the key is equal to the one we know
 		[#gcm_users{user={LUser, LServer}, gcm_key=API_KEY}] ->
 			mnesia:transaction(F),
-			?DEBUG("mod_gcm: Updating last_seen for user ~s@~s", [LUser, LServer]);
+			?DEBUG("mod_gcm: updating last_seen for user ~s@~s", [LUser, LServer]);
 
 		%% Record for this key was found, but for another key
 		[#gcm_users{user={LUser, LServer}, gcm_key=_KEY}] ->
 			mnesia:transaction(F),
-			?DEBUG("mod_gcm: Updating gcm_key for user ~s@~s", [LUser, LServer])
+			?DEBUG("mod_gcm: updating gcm_key for user ~s@~s", [LUser, LServer])
 		end,
 	
 	IQ#iq{type=result, sub_el=[]}. %% We don't need the result, but the handler have to send something.
 
 
-start(Host, Opts) -> 
+start(Host, _Opts) -> 
+	ssl:start(),
+	application:start(inets),
 	mnesia:create_table(gcm_users, [{disc_copies, [node()]}, {attributes, record_info(fields, gcm_users)}]),
-	case catch ejabberd_config:get_global_option(gcm_api_key, fun(V) -> V end) of
-		undefined -> ?ERROR_MSG("There is no API_KEY set! The GCM module won't work without the KEY!", []);
-		_ ->
-			gen_iq_handler:add_iq_handler(ejabberd_local, Host, <<?NS_GCM>>, ?MODULE, iq, no_queue),
-			ejabberd_hooks:add(offline_message_hook, Host, ?MODULE, message, 49),
-			?INFO_MSG("mod_gcm Has started successfully!", []),
-			ok
-		end.
+	gen_iq_handler:add_iq_handler(ejabberd_local, Host, <<?NS_GCM>>, ?MODULE, iq, no_queue),
+	ejabberd_hooks:add(offline_message_hook, Host, ?MODULE, message, 49),
+	?INFO_MSG("mod_gcm has started successfully!", []),
+	ok.
 
 
+stop(_Host) -> ok.
 
-stop(Host) -> ok.
+
+depends(_Host, _Opts) ->
+    [].
+
+
+mod_opt_type(gcm_api_key) -> fun iolist_to_binary/1. %binary_to_list?
